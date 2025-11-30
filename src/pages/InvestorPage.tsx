@@ -43,7 +43,7 @@ export default function InvestorPage() {
                 <img 
                   src={currentInvestor.image} 
                   alt={currentInvestor.name}
-                  className={`w-full h-full object-cover transition-transform duration-700 ${isAnimating ? 'scale-110 blur-sm' : 'scale-100'}`}
+                  className={`w-full h-full object-cover object-center transition-transform duration-700 ${isAnimating ? 'scale-110 blur-sm' : 'scale-100'}`}
                 />
                 
                 {/* Navigation Overlay */}

@@ -44,7 +44,7 @@ export default function InvestorAgents() {
                   <img 
                     src={investor.image} 
                     alt={investor.name}
-                    className="w-full h-full object-cover transition-transform duration-700 group-hover:scale-110"
+                    className="w-full h-full object-cover object-center transition-transform duration-700 group-hover:scale-110"
                   />
                   <div className="absolute bottom-4 left-6 z-20">
                     <div className="flex items-center gap-2 mb-1">
