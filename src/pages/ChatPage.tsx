@@ -6,7 +6,7 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { 
   Search, ArrowRight, FileText, Sparkles, 
   User, Bot, Settings, HelpCircle, 
-  Plus, Paperclip, Mic,
+  Plus, Paperclip,
   Lightbulb, UserCheck, Globe, Building, RefreshCw, Trash2
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
@@ -242,6 +242,32 @@ export default function ChatPage() {
   const handleUserSubmit = async (overrideInput?: string) => {
     const text = overrideInput || input;
     if (!text.trim()) return;
+
+    // Create session only when user starts actual conversation
+    if (!currentSessionId && messages.length === 0) {
+      // This is the first message, create a new session
+      const newId = Date.now().toString();
+      const title = text.length > 30 ? text.substring(0, 30) + '...' : text;
+      const newSession: ChatSession = {
+        id: newId,
+        title: title,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+        messages: [{ role: 'user', content: text }],
+        step: 'input',
+        ideas: [],
+        doc: '',
+        refinementCount: 0
+      };
+      
+      setSessions(prev => {
+        const updated = [newSession, ...prev];
+        localStorage.setItem('sparkai_sessions', JSON.stringify(updated));
+        return updated;
+      });
+      setCurrentSessionId(newId);
+      localStorage.setItem('sparkai_current_session_id', newId);
+    }
 
     // Add user message immediately
     const userMsg: Message = { role: 'user', content: text };
@@ -494,7 +520,16 @@ export default function ChatPage() {
             <Button 
               variant="ghost" 
               className="w-full justify-start gap-3 bg-[#6C63FF]/10 text-[#6C63FF] hover:bg-[#6C63FF]/20 hover:text-[#6C63FF]"
-              onClick={() => createNewSession()}
+              onClick={() => {
+                // Reset state but don't create session yet
+                setMessages([]);
+                setStep('input');
+                setIdeas([]);
+                setDoc('');
+                setRefinementCount(0);
+                setCurrentSessionId(null);
+                setInput("");
+              }}
             >
               <Lightbulb className="w-4 h-4" /> 智能点子发散
             </Button>
@@ -502,11 +537,14 @@ export default function ChatPage() {
               variant="ghost" 
               className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
               onClick={() => {
-                createNewSession();
-                setTimeout(() => {
-                  setStep('investor-chat');
-                  setMessages([{ role: 'ai', content: '请选择一位模拟投资人，或者先告诉我你的项目想法：' }]);
-                }, 0);
+                // Reset state but don't create session yet
+                setMessages([{ role: 'ai', content: '请选择一位模拟投资人，或者先告诉我你的项目想法：' }]);
+                setStep('investor-chat');
+                setIdeas([]);
+                setDoc('');
+                setRefinementCount(0);
+                setCurrentSessionId(null);
+                setInput("");
               }}
             >
               <UserCheck className="w-4 h-4" /> 模拟投资人
@@ -515,11 +553,14 @@ export default function ChatPage() {
               variant="ghost" 
               className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
               onClick={() => {
-                createNewSession();
-                setTimeout(() => {
-                  setStep('recommending-companies-input');
-                  setMessages([{ role: 'ai', content: '请输入你感兴趣的赛道或方向，我将为你推荐 ABCD 轮次的标杆公司：' }]);
-                }, 0);
+                // Reset state but don't create session yet
+                setMessages([{ role: 'ai', content: '请输入你感兴趣的赛道或方向，我将为你推荐 ABCD 轮次的标杆公司：' }]);
+                setStep('recommending-companies-input');
+                setIdeas([]);
+                setDoc('');
+                setRefinementCount(0);
+                setCurrentSessionId(null);
+                setInput("");
               }}
             >
               <Building className="w-4 h-4" /> ABCD 轮次推荐
@@ -528,17 +569,14 @@ export default function ChatPage() {
               variant="ghost" 
               className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
               onClick={() => {
-                createNewSession();
-                // Only set messages, don't change step to 'generating-doc' yet
-                // Let the user input trigger the generation
-                setTimeout(() => {
-                   setStep('input'); // Keep it at input
-                   setMessages([{ role: 'ai', content: '请告诉我你的项目点子，我将直接为你生成商业计划书 (BP)：' }]);
-                   // We'll use a temporary state or flag to know next input is for BP
-                   // But wait, handleUserSubmit uses 'step' to route logic.
-                   // So we should set step to something that waits for input, THEN generates doc.
-                   setStep('generating-doc-input'); 
-                }, 0);
+                // Reset state but don't create session yet
+                setMessages([{ role: 'ai', content: '请告诉我你的项目点子，我将直接为你生成商业计划书 (BP)：' }]);
+                setStep('generating-doc-input');
+                setIdeas([]);
+                setDoc('');
+                setRefinementCount(0);
+                setCurrentSessionId(null);
+                setInput("");
               }}
             >
               <FileText className="w-4 h-4" /> 生成 BP 文档
@@ -758,9 +796,7 @@ export default function ChatPage() {
                     <Button variant="ghost" size="sm" className="h-8 px-2 text-gray-500 hover:text-white gap-2 bg-white/5 hover:bg-white/10 rounded-full text-xs">
                       <Paperclip className="w-3 h-3" /> Attach
                     </Button>
-                    <Button variant="ghost" size="sm" className="h-8 px-2 text-gray-500 hover:text-white gap-2 bg-white/5 hover:bg-white/10 rounded-full text-xs">
-                      <Mic className="w-3 h-3" /> Voice
-                    </Button>
+
                     <Button 
                       variant="ghost" 
                       size="sm" 
@@ -797,7 +833,16 @@ export default function ChatPage() {
             variant="ghost" 
             size="icon" 
             className="h-8 w-8 text-gray-400 hover:text-white"
-            onClick={createNewSession}
+            onClick={() => {
+              // Reset to initial state without creating session
+              setMessages([]);
+              setStep('input');
+              setIdeas([]);
+              setDoc('');
+              setRefinementCount(0);
+              setCurrentSessionId(null);
+              setInput("");
+            }}
           >
             <Plus className="w-4 h-4" />
           </Button>
@@ -806,7 +851,7 @@ export default function ChatPage() {
           <div className="space-y-4">
             {sessions.length === 0 ? (
               <div className="text-center text-gray-500 text-sm py-10">
-                No projects yet. Start a new chat!
+                还没有项目记录，开始对话后自动创建项目
               </div>
             ) : (
               <div className="space-y-2">
@@ -814,23 +859,28 @@ export default function ChatPage() {
                 {sessions.map((session) => (
                   <div 
                     key={session.id} 
-                    className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${currentSessionId === session.id ? 'bg-white/10 text-white border border-white/20' : 'hover:bg-white/5 text-gray-400 border border-transparent'}`}
-                    onClick={() => restoreSession(session)}
+                    className={`group flex items-center p-3 rounded-lg cursor-pointer transition-colors ${currentSessionId === session.id ? 'bg-white/10 text-white border border-white/20' : 'hover:bg-white/5 text-gray-400 border border-transparent'}`}
                   >
-                    <div className="flex items-start gap-3 overflow-hidden">
-                      <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${currentSessionId === session.id ? 'bg-[#6C63FF]' : 'bg-zinc-800 group-hover:bg-[#6C63FF]'}`} />
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-6 w-6 text-gray-400 hover:text-red-400 hover:bg-red-400/20 mr-2 opacity-0 group-hover:opacity-100 transition-opacity"
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        deleteSession(e, session.id);
+                      }}
+                    >
+                      <Trash2 className="w-3 h-3" />
+                    </Button>
+                    <div 
+                      className="flex items-center gap-3 flex-1 overflow-hidden"
+                      onClick={() => restoreSession(session)}
+                    >
+                      <div className={`w-2 h-2 rounded-full shrink-0 ${currentSessionId === session.id ? 'bg-[#6C63FF]' : 'bg-zinc-800 group-hover:bg-[#6C63FF]'}`} />
                       <div className="text-sm truncate leading-tight">
                         {session.title}
                       </div>
                     </div>
-                    <Button 
-                      variant="ghost" 
-                      size="icon" 
-                      className="h-8 w-8 text-gray-400 hover:text-red-400 hover:bg-red-400/20"
-                      onClick={(e) => deleteSession(e, session.id)}
-                    >
-                      <Trash2 className="w-4 h-4" />
-                    </Button>
                   </div>
                 ))}
               </div>
