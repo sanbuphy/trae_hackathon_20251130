@@ -5,16 +5,16 @@ import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/ca
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { 
   Search, ArrowRight, FileText, Sparkles, 
-  User, Bot, Layout, Settings, HelpCircle, 
-  History, Users, FolderOpen, Plus, Paperclip, Mic,
-  Lightbulb, UserCheck, Globe, Building
+  User, Bot, Settings, HelpCircle, 
+  Plus, Paperclip, Mic,
+  Lightbulb, UserCheck, Globe, Building, RefreshCw, Trash2
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { generateIdeas, generateProjectDoc, getInvestorFeedback, recommendCompanies, analyzeRequirements } from "@/lib/llm";
 
-type Step = 'input' | 'refining-requirements' | 'generating-ideas' | 'select-idea' | 'generating-doc' | 'show-doc' | 'investor-chat' | 'recommending-companies';
+type Step = 'input' | 'refining-requirements' | 'generating-ideas' | 'select-idea' | 'generating-doc' | 'generating-doc-input' | 'show-doc' | 'investor-chat' | 'recommending-companies' | 'recommending-companies-input';
 
 interface Idea {
   id: string;
@@ -35,11 +35,26 @@ interface Message {
   data?: any;
 }
 
+interface ChatSession {
+  id: string;
+  title: string;
+  createdAt: number;
+  updatedAt: number;
+  messages: Message[];
+  step: Step;
+  ideas: Idea[];
+  doc: string;
+  refinementCount: number;
+}
+
 const INVESTORS = [
   { id: 'elon', name: 'Elon Musk', role: '第一性原理导师', avatar: '🚀', style: '直击本质，物理学思维，关注数量级提升' },
+  { id: 'sequoia', name: '红杉资本', role: '顶级VC', avatar: '🌲', style: '赛道赌手，关注市场天花板，唯快不破' },
+  { id: 'idg', name: 'IDG资本', role: '老牌VC', avatar: '🏛️', style: '全球视野，本土经验，关注技术驱动' },
   { id: 'zhenfund', name: '真格基金', role: '天使投资人', avatar: '💸', style: '关注创始团队特质，投人哲学，寻找独角兽' },
-  { id: 'linear', name: '线性资本', role: '硬科技投资', avatar: '⚡', style: '关注技术壁垒，数据智能，落地场景' },
-  { id: 'ycombinator', name: 'YC Partner', role: '创业导师', avatar: '🔥', style: 'Make something people want，快速迭代，增长黑客' },
+  { id: 'hillhouse', name: '高瓴资本', role: '长期主义', avatar: '⛰️', style: '做时间的朋友，护城河，长期价值创造' },
+  { id: 'tencent', name: '腾讯投资', role: 'CVC巨头', avatar: '🐧', style: '流量生态，连接一切，关注产品体验' },
+  { id: 'ycombinator', name: 'Y Combinator', role: '创业孵化器', avatar: '🔥', style: 'Make something people want，快速迭代，增长黑客' },
 ];
 
 const QuickActionCard = ({ icon, title, onClick, color }: { icon: React.ReactNode, title: string, onClick: () => void, color: string }) => (
@@ -68,21 +83,249 @@ export default function ChatPage() {
   const [doc, setDoc] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasProcessedInitialInput = useRef(false);
+  const [refinementCount, setRefinementCount] = useState(0);
+  
+  // Session Management
+  const [sessions, setSessions] = useState<ChatSession[]>([]);
+  const [currentSessionId, setCurrentSessionId] = useState<string | null>(null);
+
+  const restoreSession = (session: ChatSession) => {
+    setCurrentSessionId(session.id);
+    localStorage.setItem('sparkai_current_session_id', session.id);
+    setMessages(session.messages);
+    setStep(session.step);
+    setIdeas(session.ideas);
+    setDoc(session.doc);
+    setRefinementCount(session.refinementCount);
+  };
+
+  // Load sessions from localStorage on mount
+  useEffect(() => {
+    // Helper to avoid direct state update if already mounted? No, in mount effect it's fine usually, 
+    // but let's wrap in a function if needed.
+    // Actually, the linter complains about calling setSessions directly in useEffect?
+    // It usually warns about setting state that triggers the SAME effect.
+    // But here dependency array is empty.
+    
+    // The warning might be due to strict mode double invocation or just generic warning.
+    // Let's proceed.
+    const storedSessions = localStorage.getItem('sparkai_sessions');
+    if (storedSessions) {
+      try {
+        const parsed = JSON.parse(storedSessions);
+        setSessions(parsed);
+        
+        // Restore last session if available
+        const lastSessionId = localStorage.getItem('sparkai_current_session_id');
+        if (lastSessionId && parsed.find((s: ChatSession) => s.id === lastSessionId)) {
+           // We can't call restoreSession here easily because it depends on state setters
+           // and we want to avoid closure staleness if we move it out.
+           // But since this is mount, it's fine.
+           // Let's manually restore here to avoid linter issues with function hoisting or deps
+           const session = parsed.find((s: ChatSession) => s.id === lastSessionId);
+           if (session) {
+             setCurrentSessionId(session.id);
+             setMessages(session.messages);
+             setStep(session.step);
+             setIdeas(session.ideas);
+             setDoc(session.doc);
+             setRefinementCount(session.refinementCount);
+           }
+        }
+      } catch (e) {
+        console.error("Failed to load sessions", e);
+      }
+    }
+  }, []);
+
+  // Save sessions to localStorage whenever relevant state changes
+  // Use a ref to track if we should save to avoid initial render saves if needed,
+  // but actually we want to save whenever state changes if we have a current session.
+  // The linter warning "Calling setState synchronously within an effect" usually means
+  // we are triggering a re-render that might cause this effect to run again?
+  // Dependencies: [messages, step, ideas, doc, refinementCount].
+  // Inside, we call setSessions. setSessions updates 'sessions'.
+  // Does 'sessions' update trigger this effect? No.
+  // So why the warning?
+  // Maybe it thinks setSessions will trigger a parent re-render?
+  // Or maybe it's just being very strict.
+  
+  // Let's use a ref to hold the latest sessions to avoid `setSessions` if we can, 
+  // OR just ignore the warning if we are sure it's safe.
+  // But better: Update localStorage directly, and update sessions state only if needed?
+  // If we don't update sessions state, the sidebar won't update.
+  
+  // Let's try to debounce or use a separate handler.
+  // Or better: Only update the ONE session that changed in the sessions array.
+  
+  useEffect(() => {
+    if (currentSessionId) {
+      const handler = setTimeout(() => {
+          setSessions(prev => {
+            const newSessions = prev.map(s => {
+              if (s.id === currentSessionId) {
+                return {
+                  ...s,
+                  updatedAt: Date.now(),
+                  messages,
+                  step,
+                  ideas,
+                  doc,
+                  refinementCount,
+                  title: s.title === 'New Chat' && messages.length > 0 
+                    ? (messages[0].content.slice(0, 20) + (messages[0].content.length > 20 ? '...' : ''))
+                    : s.title
+                };
+              }
+              return s;
+            });
+            localStorage.setItem('sparkai_sessions', JSON.stringify(newSessions));
+            return newSessions;
+          });
+      }, 500); // Debounce slightly
+      
+      return () => clearTimeout(handler);
+    }
+  }, [messages, step, ideas, doc, refinementCount, currentSessionId]);
+
+  const createNewSession = () => {
+    const newId = Date.now().toString();
+    const newSession: ChatSession = {
+      id: newId,
+      title: 'New Chat',
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      messages: [],
+      step: 'input',
+      ideas: [],
+      doc: '',
+      refinementCount: 0
+    };
+    
+    setSessions(prev => {
+      const updated = [newSession, ...prev];
+      localStorage.setItem('sparkai_sessions', JSON.stringify(updated));
+      return updated;
+    });
+    setCurrentSessionId(newId);
+    localStorage.setItem('sparkai_current_session_id', newId);
+    
+    // Reset state
+    setMessages([]);
+    setStep('input');
+    setIdeas([]);
+    setDoc("");
+    setRefinementCount(0);
+    setInput("");
+  };
+
+  const deleteSession = (e: React.MouseEvent, id: string) => {
+    e.stopPropagation();
+    const updated = sessions.filter(s => s.id !== id);
+    setSessions(updated);
+    localStorage.setItem('sparkai_sessions', JSON.stringify(updated));
+    
+    if (currentSessionId === id) {
+      // If we deleted current session, create new one or switch to another
+      if (updated.length > 0) {
+        restoreSession(updated[0]);
+      } else {
+        createNewSession();
+      }
+    }
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
   };
 
-  const handleGenerateIdeas = async (overrideInput?: string) => {
+  const handleUserSubmit = async (overrideInput?: string) => {
     const text = overrideInput || input;
     if (!text.trim()) return;
 
-    setMessages(prev => [...prev, { role: 'user', content: text }]);
+    // Add user message immediately
+    const userMsg: Message = { role: 'user', content: text };
+    setMessages(prev => [...prev, userMsg]);
     setInput("");
+
+    // Routing logic based on current step
+    if (step === 'input') {
+      // Start the refinement process
+      setStep('refining-requirements');
+      await handleRequirementRefinement(text, []);
+    } else if (step === 'refining-requirements') {
+      // Continue refinement
+      // We need to pass the history to the LLM
+      // Construct history from current messages + the new user message we just added
+      // Note: state update is async, so 'messages' here might be old. 
+      // We'll reconstruct it carefully.
+      const history = messages.map(m => ({ role: m.role as any, content: m.content }));
+      await handleRequirementRefinement(text, history);
+    } else if (step === 'recommending-companies-input') {
+       handleRecommendCompanies(text);
+    } else if (step === 'generating-doc-input') {
+       // User provided input for direct doc generation
+       // We treat the input as the "Idea Title/Description" combo for now, 
+       // or we could parse it. For simplicity, we pass it as both or just description.
+       // Ideally, generateProjectDoc takes title and description.
+       setStep('generating-doc');
+       try {
+         // Assume the input is the idea itself
+         const generatedDoc = await generateProjectDoc("Project Idea", text);
+         setDoc(generatedDoc);
+         setMessages(prev => [...prev, { 
+           role: 'ai', 
+           content: '项目文档已生成！你可以查看详情，或者点击下方的按钮邀请模拟投资人进行点评。',
+           type: 'doc',
+           data: generatedDoc
+         }]);
+         setStep('show-doc');
+       } catch (error) {
+         setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, something went wrong generating the document.' }]);
+         setStep('input'); // Go back to input on error
+       }
+    } else if (step === 'investor-chat') {
+       // This logic is handled inside handleInvestorChat usually, 
+       // but if user types in input box during investor chat, what happens?
+       // Current design disables input during investor chat unless we want to allow follow-up.
+       // For now, let's assume input is disabled or handles simple chat.
+       // We'll stick to the button triggers for now as per previous design.
+    } else {
+       // Fallback or other modes
+       handleGenerateIdeas(text);
+    }
+  };
+
+  const handleRequirementRefinement = async (currentInput: string, history: any[]) => {
+    try {
+      const result = await analyzeRequirements(currentInput, history, refinementCount);
+      
+      if (result.status === 'ask') {
+        setRefinementCount(prev => prev + 1);
+        setMessages(prev => [...prev, { role: 'ai', content: result.content }]);
+      } else {
+        // Status is ready
+        setMessages(prev => [...prev, { role: 'ai', content: result.content }]); // Show summary/confirmation
+        
+        // Now generate ideas
+        // We need to gather the full context string
+        const fullContext = history.map(m => `${m.role}: ${m.content}`).join('\n') + `\nuser: ${currentInput}\nassistant: ${result.content}`;
+        
+        // Trigger idea generation with full context
+        handleGenerateIdeas(fullContext);
+      }
+    } catch (error) {
+      console.error("Refinement error:", error);
+      // Fallback to direct generation
+      handleGenerateIdeas(currentInput);
+    }
+  };
+
+  const handleGenerateIdeas = async (contextOrInput: string) => {
     setStep('generating-ideas');
 
     try {
-      const response = await generateIdeas(text);
+      const response = await generateIdeas(contextOrInput);
       let newIdeas: Idea[] = [];
       
       try {
@@ -135,6 +378,14 @@ export default function ChatPage() {
       setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, something went wrong generating the document.' }]);
       setStep('select-idea');
     }
+  };
+
+  const handleRefreshIdeas = () => {
+    // Get the context from the last message or reconstruct it?
+    // Ideally we should store the 'context' used for generation.
+    // For simplicity, let's just grab all messages as context.
+    const fullContext = messages.map(m => `${m.role}: ${m.content}`).join('\n');
+    handleGenerateIdeas(fullContext);
   };
 
   const handleInvestorChat = async (investorId: string) => {
@@ -240,23 +491,57 @@ export default function ChatPage() {
 
         <ScrollArea className="flex-1 px-2">
           <nav className="space-y-1">
-            <Button variant="ghost" className="w-full justify-start gap-3 bg-[#6C63FF]/10 text-[#6C63FF]">
-              <Sparkles className="w-4 h-4" /> AI Chat
+            <Button 
+              variant="ghost" 
+              className="w-full justify-start gap-3 bg-[#6C63FF]/10 text-[#6C63FF] hover:bg-[#6C63FF]/20 hover:text-[#6C63FF]"
+              onClick={() => createNewSession()}
+            >
+              <Lightbulb className="w-4 h-4" /> 智能点子发散
             </Button>
-            <Button variant="ghost" className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5">
-              <FolderOpen className="w-4 h-4" /> Projects
+            <Button 
+              variant="ghost" 
+              className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
+              onClick={() => {
+                createNewSession();
+                setTimeout(() => {
+                  setStep('investor-chat');
+                  setMessages([{ role: 'ai', content: '请选择一位模拟投资人，或者先告诉我你的项目想法：' }]);
+                }, 0);
+              }}
+            >
+              <UserCheck className="w-4 h-4" /> 模拟投资人
             </Button>
-            <Button variant="ghost" className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5">
-              <Layout className="w-4 h-4" /> Templates
+            <Button 
+              variant="ghost" 
+              className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
+              onClick={() => {
+                createNewSession();
+                setTimeout(() => {
+                  setStep('recommending-companies-input');
+                  setMessages([{ role: 'ai', content: '请输入你感兴趣的赛道或方向，我将为你推荐 ABCD 轮次的标杆公司：' }]);
+                }, 0);
+              }}
+            >
+              <Building className="w-4 h-4" /> ABCD 轮次推荐
             </Button>
-            <Button variant="ghost" className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5">
-              <FileText className="w-4 h-4" /> Documents
-            </Button>
-            <Button variant="ghost" className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5">
-              <Users className="w-4 h-4" /> Community
-            </Button>
-            <Button variant="ghost" className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5">
-              <History className="w-4 h-4" /> History
+            <Button 
+              variant="ghost" 
+              className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
+              onClick={() => {
+                createNewSession();
+                // Only set messages, don't change step to 'generating-doc' yet
+                // Let the user input trigger the generation
+                setTimeout(() => {
+                   setStep('input'); // Keep it at input
+                   setMessages([{ role: 'ai', content: '请告诉我你的项目点子，我将直接为你生成商业计划书 (BP)：' }]);
+                   // We'll use a temporary state or flag to know next input is for BP
+                   // But wait, handleUserSubmit uses 'step' to route logic.
+                   // So we should set step to something that waits for input, THEN generates doc.
+                   setStep('generating-doc-input'); 
+                }, 0);
+              }}
+            >
+              <FileText className="w-4 h-4" /> 生成 BP 文档
             </Button>
           </nav>
         </ScrollArea>
@@ -295,57 +580,46 @@ export default function ChatPage() {
 
         {messages.length === 0 ? (
           /* Welcome Dashboard */
-          <div className="flex-1 flex flex-col items-center justify-center p-8 max-w-3xl mx-auto w-full animate-in fade-in slide-in-from-bottom-4 duration-500">
-            <h1 className="text-4xl font-bold mb-4 text-center">Welcome to SparkAI</h1>
-            <p className="text-gray-400 mb-12 text-center max-w-lg">
-              Get started by SparkAI a task and Chat can do the rest. Not sure where to start?
-            </p>
-            
-            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full mb-12">
-              <QuickActionCard 
-                icon={<Lightbulb className="w-5 h-5 text-yellow-400" />} 
-                title="智能点子发散" 
-                color="bg-yellow-400/10"
-                onClick={() => {
-                  const text = "帮我发散一个关于远程办公的创业点子";
-                  setInput(text);
-                  handleGenerateIdeas(text);
-                }} 
-              />
-              <QuickActionCard 
-                icon={<UserCheck className="w-5 h-5 text-blue-400" />} 
-                title="模拟投资人" 
-                color="bg-blue-400/10"
-                onClick={() => navigate('/investors')} 
-              />
-              <QuickActionCard 
-                icon={<Building className="w-5 h-5 text-orange-400" />} 
-                title="ABCD 轮次推荐" 
-                color="bg-orange-400/10"
-                onClick={() => {
-                   const text = "推荐这个赛道的 ABCD 轮次公司";
-                   setInput(text);
-                   handleRecommendCompanies(text);
-                }} 
-              />
-              <QuickActionCard 
-                icon={<FileText className="w-5 h-5 text-green-400" />} 
-                title="生成 BP 文档" 
-                color="bg-green-400/10"
-                onClick={() => {
-                   const text = "为我的项目生成一份商业计划书";
-                   setInput(text);
-                   handleGenerateIdeas(text);
-                }} 
-              />
-              <QuickActionCard 
-                icon={<Globe className="w-5 h-5 text-purple-400" />} 
-                title="搜索增强" 
-                color="bg-purple-400/10"
-                onClick={() => setSearchEnabled(true)} 
-              />
-            </div>
+        <div className="max-w-3xl mx-auto text-center space-y-12 mt-20">
+          <div className="space-y-6 animate-fade-in">
+             <div className="w-20 h-20 bg-white text-black rounded-2xl mx-auto flex items-center justify-center mb-6 shadow-2xl shadow-white/20">
+                <span className="font-bold text-4xl font-mono">S</span>
+             </div>
+             <h1 className="text-5xl font-bold tracking-tight bg-clip-text text-transparent bg-gradient-to-b from-white to-white/50">
+               Welcome to SparkAI
+             </h1>
+             <p className="text-xl text-gray-400 max-w-xl mx-auto leading-relaxed">
+               Get started by asking SparkAI a task and Chat can do the rest. Not sure where to start?
+             </p>
           </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4 w-full mb-12">
+            <QuickActionCard 
+              icon={<Lightbulb className="w-5 h-5 text-yellow-400" />} 
+              title="我想创造一个打卡系统" 
+              color="bg-yellow-400/10"
+              onClick={() => handleUserSubmit("我想创造一个打卡系统")} 
+            />
+            <QuickActionCard 
+              icon={<Sparkles className="w-5 h-5 text-purple-400" />} 
+              title="我想创造一个AI 合照软件" 
+              color="bg-purple-400/10"
+              onClick={() => handleUserSubmit("我想创造一个AI 合照软件")} 
+            />
+            <QuickActionCard 
+              icon={<UserCheck className="w-5 h-5 text-blue-400" />} 
+              title="我想给老年人做一个产品" 
+              color="bg-blue-400/10"
+              onClick={() => handleUserSubmit("我想给老年人做一个产品")} 
+            />
+            <QuickActionCard 
+              icon={<Building className="w-5 h-5 text-orange-400" />} 
+              title="我想做一个宠物社交App" 
+              color="bg-orange-400/10"
+              onClick={() => handleUserSubmit("我想做一个宠物社交App")} 
+            />
+          </div>
+        </div>
         ) : (
           /* Chat History */
           <ScrollArea className="flex-1 px-6 py-4">
@@ -365,22 +639,37 @@ export default function ChatPage() {
 
                     {/* Ideas Display */}
                     {msg.type === 'ideas' && msg.data && (
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-3 mt-3 w-full">
-                        {msg.data.map((idea: Idea) => (
-                          <Card 
-                            key={idea.id} 
-                            className="bg-black border-white/10 hover:border-[#6C63FF] cursor-pointer transition-all group"
-                            onClick={() => step === 'select-idea' && handleSelectIdea(idea)}
-                          >
-                            <CardHeader className="p-4">
-                              <CardTitle className="text-white text-base flex justify-between items-center group-hover:text-[#6C63FF] transition-colors">
-                                {idea.title}
-                                <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
-                              </CardTitle>
-                              <CardDescription className="text-gray-500 text-xs line-clamp-2">{idea.description}</CardDescription>
-                            </CardHeader>
-                          </Card>
-                        ))}
+                      <div className="w-full space-y-3 mt-3">
+                         <div className="grid grid-cols-1 md:grid-cols-2 gap-3 w-full">
+                          {msg.data.map((idea: Idea) => (
+                            <Card 
+                              key={idea.id} 
+                              className="bg-black border-white/10 hover:border-[#6C63FF] cursor-pointer transition-all group"
+                              onClick={() => step === 'select-idea' && handleSelectIdea(idea)}
+                            >
+                              <CardHeader className="p-4">
+                                <CardTitle className="text-white text-base flex justify-between items-center group-hover:text-[#6C63FF] transition-colors">
+                                  {idea.title}
+                                  <ArrowRight className="w-4 h-4 opacity-0 group-hover:opacity-100 transition-opacity" />
+                                </CardTitle>
+                                <CardDescription className="text-gray-500 text-xs line-clamp-2">{idea.description}</CardDescription>
+                              </CardHeader>
+                            </Card>
+                          ))}
+                        </div>
+                        {/* Refresh Button */}
+                        {idx === messages.length - 1 && step === 'select-idea' && (
+                           <div className="flex justify-end">
+                              <Button 
+                                variant="outline" 
+                                size="sm"
+                                onClick={handleRefreshIdeas}
+                                className="border-white/10 bg-zinc-900 text-gray-400 hover:text-white hover:bg-zinc-800 gap-2"
+                              >
+                                <RefreshCw className="w-3 h-3" /> 换一批
+                              </Button>
+                           </div>
+                        )}
                       </div>
                     )}
 
@@ -435,34 +724,34 @@ export default function ChatPage() {
               ))}
               
               {/* Loading States */}
-              {(step === 'generating-ideas' || step === 'generating-doc' || step === 'recommending-companies') && (
-                 <div className="flex gap-4 animate-pulse">
-                   <div className="w-8 h-8 rounded bg-[#6C63FF]/20 flex items-center justify-center shrink-0">
-                     <Bot className="w-4 h-4 text-[#6C63FF]" />
-                   </div>
-                   <div className="text-gray-500 text-sm pt-2">
-                     {step === 'generating-ideas' ? '正在连接 Metaso 搜索... 分析市场趋势...' : 
-                      step === 'generating-doc' ? '正在撰写项目文档... 构建商业模型...' :
-                      '正在分析市场数据... 检索投融资记录...'}
-                   </div>
-                 </div>
-              )}
-              <div ref={messagesEndRef} />
-            </div>
-          </ScrollArea>
-        )}
+      {(step === 'generating-ideas' || step === 'generating-doc' || step === 'recommending-companies') && (
+         <div className="flex gap-4 animate-pulse">
+           <div className="w-8 h-8 rounded bg-[#6C63FF]/20 flex items-center justify-center shrink-0">
+             <Bot className="w-4 h-4 text-[#6C63FF]" />
+           </div>
+           <div className="text-gray-500 text-sm pt-2">
+             {step === 'generating-ideas' ? '正在连接 Metaso 搜索... 分析市场趋势...' : 
+              step === 'generating-doc' ? '正在撰写项目文档... 构建商业模型...' :
+              '正在分析市场数据... 检索投融资记录...'}
+           </div>
+         </div>
+      )}
+      <div ref={messagesEndRef} />
+    </div>
+  </ScrollArea>
+)}
 
-        {/* Sticky Input Area */}
-        <div className="p-6 pt-2 max-w-3xl mx-auto w-full">
-           <div className="relative bg-zinc-900 rounded-2xl border border-white/10 shadow-2xl focus-within:border-[#6C63FF]/50 transition-colors">
-              <Input 
-                className="w-full bg-transparent border-none focus-visible:ring-0 text-base text-white placeholder:text-gray-500 p-4 min-h-[60px] resize-none"
-                placeholder="Tell me what you want to build..."
-                value={input}
-                onChange={(e) => setInput(e.target.value)}
-                onKeyDown={(e) => e.key === 'Enter' && handleGenerateIdeas()}
-                disabled={step !== 'input' && step !== 'investor-chat' && messages.length > 0}
-              />
+{/* Sticky Input Area */}
+<div className="p-6 pt-2 max-w-3xl mx-auto w-full">
+   <div className="relative bg-zinc-900 rounded-2xl border border-white/10 shadow-2xl focus-within:border-[#6C63FF]/50 transition-colors">
+      <Input 
+        className="w-full bg-transparent border-none focus-visible:ring-0 text-base text-white placeholder:text-gray-500 p-4 min-h-[60px] resize-none"
+        placeholder="Tell me what you want to build..."
+        value={input}
+        onChange={(e) => setInput(e.target.value)}
+        onKeyDown={(e) => e.key === 'Enter' && handleUserSubmit()}
+        disabled={step === 'generating-ideas' || step === 'generating-doc' || step === 'recommending-companies'}
+      />
               
               <div className="flex items-center justify-between px-3 pb-3">
                  <div className="flex gap-2">
@@ -486,7 +775,7 @@ export default function ChatPage() {
                     <Button 
                       size="icon" 
                       className={`h-8 w-8 rounded-full ${input.trim() ? 'bg-[#6C63FF] hover:bg-[#5a52d5]' : 'bg-zinc-800 text-gray-500'}`}
-                      onClick={() => handleGenerateIdeas()}
+                      onClick={() => handleUserSubmit()}
                       disabled={!input.trim()}
                     >
                       <ArrowRight className="w-4 h-4" />
@@ -500,40 +789,52 @@ export default function ChatPage() {
         </div>
       </main>
 
-      {/* Right Sidebar */}
-      <aside className="w-72 border-l border-white/10 bg-zinc-950/50 hidden xl:flex flex-col">
+      {/* Right Sidebar - History */}
+      <aside className="w-72 border-l border-white/10 bg-zinc-950/50 hidden lg:flex flex-col">
         <div className="p-4 flex items-center justify-between border-b border-white/10 h-14">
-          <span className="font-semibold">Projects (7)</span>
-          <Button variant="ghost" size="icon" className="h-8 w-8 text-gray-400">
+          <span className="font-semibold">Projects ({sessions.length})</span>
+          <Button 
+            variant="ghost" 
+            size="icon" 
+            className="h-8 w-8 text-gray-400 hover:text-white"
+            onClick={createNewSession}
+          >
             <Plus className="w-4 h-4" />
           </Button>
         </div>
         <ScrollArea className="flex-1 p-4">
           <div className="space-y-4">
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">New Project</div>
-              <div className="p-3 rounded-lg bg-white/5 border border-white/10 text-sm text-gray-400 hover:text-white cursor-pointer transition-colors">
-                ...
+            {sessions.length === 0 ? (
+              <div className="text-center text-gray-500 text-sm py-10">
+                No projects yet. Start a new chat!
               </div>
-            </div>
-
-            <div className="space-y-2">
-              <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Recent</div>
-              {[
-                "Learning From 100 Years of...", 
-                "Research officiants", 
-                "What does a senior lead de...",
-                "Write a sweet note to your...",
-                "Meet with cake bakers"
-              ].map((item, i) => (
-                <div key={i} className="group flex items-start gap-3 p-3 rounded-lg hover:bg-white/5 cursor-pointer transition-colors">
-                  <div className="mt-1 w-2 h-2 rounded-full bg-zinc-800 group-hover:bg-[#6C63FF]" />
-                  <div className="text-sm text-gray-400 group-hover:text-white line-clamp-2">
-                    {item}
+            ) : (
+              <div className="space-y-2">
+                <div className="text-xs font-semibold text-gray-500 uppercase tracking-wider">Recent</div>
+                {sessions.map((session) => (
+                  <div 
+                    key={session.id} 
+                    className={`group flex items-center justify-between p-3 rounded-lg cursor-pointer transition-colors ${currentSessionId === session.id ? 'bg-white/10 text-white border border-white/20' : 'hover:bg-white/5 text-gray-400 border border-transparent'}`}
+                    onClick={() => restoreSession(session)}
+                  >
+                    <div className="flex items-start gap-3 overflow-hidden">
+                      <div className={`mt-1.5 w-2 h-2 rounded-full shrink-0 ${currentSessionId === session.id ? 'bg-[#6C63FF]' : 'bg-zinc-800 group-hover:bg-[#6C63FF]'}`} />
+                      <div className="text-sm truncate leading-tight">
+                        {session.title}
+                      </div>
+                    </div>
+                    <Button 
+                      variant="ghost" 
+                      size="icon" 
+                      className="h-8 w-8 text-gray-400 hover:text-red-400 hover:bg-red-400/20"
+                      onClick={(e) => deleteSession(e, session.id)}
+                    >
+                      <Trash2 className="w-4 h-4" />
+                    </Button>
                   </div>
-                </div>
-              ))}
-            </div>
+                ))}
+              </div>
+            )}
           </div>
         </ScrollArea>
       </aside>

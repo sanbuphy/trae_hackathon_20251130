@@ -102,7 +102,7 @@ const TextType = ({
   useEffect(() => {
     if (!isVisible) return;
 
-    let timeout: ReturnType<typeof setTimeout>;
+    let timeout: number;
     const currentText = textArray[currentTextIndex];
     const processedText = reverseMode ? currentText.split('').reverse().join('') : currentText;
 
@@ -120,15 +120,15 @@ const TextType = ({
 
           setCurrentTextIndex(prev => (prev + 1) % textArray.length);
           setCurrentCharIndex(0);
-          timeout = setTimeout(() => {}, pauseDuration);
+          timeout = window.setTimeout(() => {}, pauseDuration);
         } else {
-          timeout = setTimeout(() => {
+          timeout = window.setTimeout(() => {
             setDisplayedText(prev => prev.slice(0, -1));
           }, deletingSpeed);
         }
       } else {
         if (currentCharIndex < processedText.length) {
-          timeout = setTimeout(
+          timeout = window.setTimeout(
             () => {
               setDisplayedText(prev => prev + processedText[currentCharIndex]);
               setCurrentCharIndex(prev => prev + 1);
@@ -137,7 +137,7 @@ const TextType = ({
           );
         } else if (textArray.length >= 1) {
           if (!loop && currentTextIndex === textArray.length - 1) return;
-          timeout = setTimeout(() => {
+          timeout = window.setTimeout(() => {
             setIsDeleting(true);
           }, pauseDuration);
         }
@@ -145,7 +145,7 @@ const TextType = ({
     };
 
     if (currentCharIndex === 0 && !isDeleting && displayedText === '') {
-      timeout = setTimeout(executeTypingAnimation, initialDelay);
+      timeout = window.setTimeout(executeTypingAnimation, initialDelay);
     } else {
       executeTypingAnimation();
     }
