@@ -381,7 +381,13 @@ export default function ChatPage() {
       }]);
       setStep('select-idea');
     } catch (error) {
-      setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, something went wrong generating ideas.' }]);
+      console.error("Error in handleGenerateIdeas:", error);
+      // 显示具体的API错误信息，而不是通用消息
+      const errorMessage = error instanceof Error && error.message.includes('API_ERROR') 
+        ? error.message.replace('API_ERROR: ', '')
+        : '抱歉，生成想法时遇到了问题。请检查API密钥和连接状态。';
+      
+      setMessages(prev => [...prev, { role: 'ai', content: errorMessage }]);
       setStep('input');
     }
   };
@@ -671,8 +677,8 @@ export default function ChatPage() {
                   <div className={`space-y-2 max-w-[85%] ${msg.role === 'user' ? 'items-end' : 'items-start'}`}>
                     {msg.data?.investor && <div className="text-xs text-gray-400 font-bold">{msg.data.investor.name} ({msg.data.investor.role})</div>}
                     
-                    <div className={`p-4 rounded-xl text-sm md:text-base leading-relaxed ${msg.role === 'user' ? 'bg-white/10 text-white' : 'bg-zinc-900 border border-white/10 text-gray-300'}`}>
-                      {msg.content}
+                    <div className={`p-4 rounded-xl text-sm md:text-base leading-relaxed prose prose-invert prose-sm max-w-none ${msg.role === 'user' ? 'bg-white/10 text-white' : 'bg-zinc-900 border border-white/10 text-gray-300'}`}>
+                      <ReactMarkdown>{msg.content}</ReactMarkdown>
                     </div>
 
                     {/* Ideas Display */}

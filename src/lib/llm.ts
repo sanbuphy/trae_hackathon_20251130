@@ -36,7 +36,8 @@ export async function getLLMCompletion(messages: ChatMessage[]): Promise<string>
     return response.choices[0].message.content || "";
   } catch (error) {
     console.error("Error calling DeepSeek API:", error);
-    return "Sorry, I encountered an error while processing your request. Please check your API key and connection.";
+    // 抛出一个错误而不是返回错误消息字符串，这样调用者可以正确处理
+    throw new Error("API_ERROR: Sorry, I encountered an error while processing your request. Please check your API key and connection.");
   }
 }
 
