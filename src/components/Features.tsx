@@ -14,8 +14,8 @@ export default function Features() {
     },
     {
       icon: <UserCheck className="w-6 h-6 text-[#6C63FF]" />,
-      title: "模拟投资人评估",
-      description: "与模拟的马斯克、真格基金合伙人对话，从“第一性原理”或“投人哲学”角度获得毒辣点评。"
+      title: "投资人智能体评估",
+      description: "与红杉、IDG、真格基金等顶级 VC 的 AI 分身直接对话，获取“第一性原理”或“赛道思维”的毒辣点评。"
     },
     {
       icon: <BrainCircuit className="w-6 h-6 text-[#6C63FF]" />,

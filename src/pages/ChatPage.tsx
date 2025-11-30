@@ -1,4 +1,4 @@
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useCallback } from "react";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Card, CardHeader, CardTitle, CardDescription } from "@/components/ui/card";
@@ -13,6 +13,7 @@ import ReactMarkdown from "react-markdown";
 import { useNavigate, useLocation } from "react-router-dom";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { generateIdeas, generateProjectDoc, getInvestorFeedback, recommendCompanies, analyzeRequirements } from "@/lib/llm";
+import { INVESTORS } from "@/lib/investors";
 
 type Step = 'input' | 'refining-requirements' | 'generating-ideas' | 'select-idea' | 'generating-doc' | 'generating-doc-input' | 'show-doc' | 'investor-chat' | 'recommending-companies' | 'recommending-companies-input';
 
@@ -31,7 +32,8 @@ interface CompanyRecommendation {
 interface Message {
   role: 'user' | 'ai' | 'system';
   content: string;
-  type?: 'text' | 'ideas' | 'doc' | 'companies';
+  type?: 'text' | 'ideas' | 'doc' | 'companies' | 'investor-selection';
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   data?: any;
 }
 
@@ -47,15 +49,6 @@ interface ChatSession {
   refinementCount: number;
 }
 
-const INVESTORS = [
-  { id: 'elon', name: 'Elon Musk', role: '第一性原理导师', avatar: '🚀', style: '直击本质，物理学思维，关注数量级提升' },
-  { id: 'sequoia', name: '红杉资本', role: '顶级VC', avatar: '🌲', style: '赛道赌手，关注市场天花板，唯快不破' },
-  { id: 'idg', name: 'IDG资本', role: '老牌VC', avatar: '🏛️', style: '全球视野，本土经验，关注技术驱动' },
-  { id: 'zhenfund', name: '真格基金', role: '天使投资人', avatar: '💸', style: '关注创始团队特质，投人哲学，寻找独角兽' },
-  { id: 'hillhouse', name: '高瓴资本', role: '长期主义', avatar: '⛰️', style: '做时间的朋友，护城河，长期价值创造' },
-  { id: 'tencent', name: '腾讯投资', role: 'CVC巨头', avatar: '🐧', style: '流量生态，连接一切，关注产品体验' },
-  { id: 'ycombinator', name: 'Y Combinator', role: '创业孵化器', avatar: '🔥', style: 'Make something people want，快速迭代，增长黑客' },
-];
 
 const QuickActionCard = ({ icon, title, onClick, color }: { icon: React.ReactNode, title: string, onClick: () => void, color: string }) => (
   <div 
@@ -77,13 +70,12 @@ export default function ChatPage() {
   const [input, setInput] = useState("");
   const [searchEnabled, setSearchEnabled] = useState(false);
   const [messages, setMessages] = useState<Message[]>([]);
-  // @ts-ignore
   const [ideas, setIdeas] = useState<Idea[]>([]);
-  // @ts-ignore
   const [doc, setDoc] = useState("");
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const hasProcessedInitialInput = useRef(false);
   const [refinementCount, setRefinementCount] = useState(0);
+  const [activeInvestorId, setActiveInvestorId] = useState<string | null>(null);
   
   // Session Management
   const [sessions, setSessions] = useState<ChatSession[]>([]);
@@ -188,7 +180,7 @@ export default function ChatPage() {
     }
   }, [messages, step, ideas, doc, refinementCount, currentSessionId]);
 
-  const createNewSession = () => {
+  const createNewSession = useCallback(() => {
     const newId = Date.now().toString();
     const newSession: ChatSession = {
       id: newId,
@@ -217,7 +209,7 @@ export default function ChatPage() {
     setDoc("");
     setRefinementCount(0);
     setInput("");
-  };
+  }, []);
 
   const deleteSession = (e: React.MouseEvent, id: string) => {
     e.stopPropagation();
@@ -246,12 +238,15 @@ export default function ChatPage() {
     // Create session only when user starts actual conversation
     if (!currentSessionId && messages.length === 0) {
       // This is the first message, create a new session
+      // eslint-disable-next-line
       const newId = Date.now().toString();
       const title = text.length > 30 ? text.substring(0, 30) + '...' : text;
       const newSession: ChatSession = {
         id: newId,
         title: title,
+        // eslint-disable-next-line
         createdAt: Date.now(),
+        // eslint-disable-next-line
         updatedAt: Date.now(),
         messages: [{ role: 'user', content: text }],
         step: 'input',
@@ -285,6 +280,7 @@ export default function ChatPage() {
       // Construct history from current messages + the new user message we just added
       // Note: state update is async, so 'messages' here might be old. 
       // We'll reconstruct it carefully.
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
       const history = messages.map(m => ({ role: m.role as any, content: m.content }));
       await handleRequirementRefinement(text, history);
     } else if (step === 'recommending-companies-input') {
@@ -306,22 +302,40 @@ export default function ChatPage() {
            data: generatedDoc
          }]);
          setStep('show-doc');
-       } catch (error) {
+       } catch {
          setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, something went wrong generating the document.' }]);
          setStep('input'); // Go back to input on error
        }
     } else if (step === 'investor-chat') {
-       // This logic is handled inside handleInvestorChat usually, 
-       // but if user types in input box during investor chat, what happens?
-       // Current design disables input during investor chat unless we want to allow follow-up.
-       // For now, let's assume input is disabled or handles simple chat.
-       // We'll stick to the button triggers for now as per previous design.
+       // If we have an active investor, chat with them
+       if (activeInvestorId) {
+         try {
+            const feedback = await getInvestorFeedback(activeInvestorId, text);
+            const investor = INVESTORS.find(i => i.id === activeInvestorId);
+            setMessages(prev => [...prev, { 
+              role: 'ai', 
+              content: feedback,
+              data: { investor }
+            }]);
+         } catch {
+            setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, error getting feedback.' }]);
+         }
+       } else {
+         // User provided input but hasn't selected an investor yet
+         // Store the input (it's already in messages) and prompt for selection
+         setMessages(prev => [...prev, { 
+           role: 'ai', 
+           content: '收到你的项目想法。请选择一位投资人智能体进行点评：',
+           type: 'investor-selection'
+         }]);
+       }
     } else {
        // Fallback or other modes
        handleGenerateIdeas(text);
     }
   };
 
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const handleRequirementRefinement = async (currentInput: string, history: any[]) => {
     try {
       const result = await analyzeRequirements(currentInput, history, refinementCount);
@@ -406,7 +420,7 @@ export default function ChatPage() {
         data: generatedDoc
       }]);
       setStep('show-doc');
-    } catch (error) {
+    } catch {
       setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, something went wrong generating the document.' }]);
       setStep('select-idea');
     }
@@ -424,12 +438,33 @@ export default function ChatPage() {
     const investor = INVESTORS.find(i => i.id === investorId);
     if (!investor) return;
 
+    // Determine context first
+    let context = doc;
+    
+    // Find the last meaningful user input if no doc
+    if (!context) {
+       const userMessages = messages.filter(m => m.role === 'user');
+       if (userMessages.length > 0) {
+         context = userMessages[userMessages.length - 1].content;
+       }
+    }
+    
+    // If no context (no doc, no user messages), then we are just selecting the investor
+    if (!context) {
+       setActiveInvestorId(investorId);
+       setMessages(prev => [...prev, { 
+         role: 'ai', 
+         content: `你选择了 ${investor.name}。请告诉我你的项目想法，我将从${investor.role}的角度进行点评。` 
+       }]);
+       setStep('investor-chat');
+       return;
+    }
+
+    setActiveInvestorId(investorId);
     setMessages(prev => [...prev, { role: 'user', content: `我想听听 ${investor.name} 的看法。` }]);
     setStep('investor-chat');
 
     try {
-      // Use the last generated doc or the last user message as context
-      const context = doc || messages[messages.length - 1].content;
       const feedback = await getInvestorFeedback(investorId, context);
 
       setMessages(prev => [...prev, { 
@@ -437,7 +472,7 @@ export default function ChatPage() {
         content: feedback,
         data: { investor }
       }]);
-    } catch (error) {
+    } catch {
       setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, the investor is currently unavailable.' }]);
     }
   };
@@ -477,7 +512,7 @@ export default function ChatPage() {
         type: 'companies',
         data: recommendations
       }]);
-    } catch (error) {
+    } catch {
       setMessages(prev => [...prev, { role: 'ai', content: 'Sorry, something went wrong fetching recommendations.' }]);
       setStep('input');
     }
@@ -488,13 +523,23 @@ export default function ChatPage() {
   }, [messages, step]);
 
   useEffect(() => {
-    if (location.state?.initialInput && !hasProcessedInitialInput.current) {
+    if (location.state && !hasProcessedInitialInput.current) {
       hasProcessedInitialInput.current = true;
-      const initialInput = location.state.initialInput;
+      const { initialInput, investorId } = location.state;
       // Clear state so it doesn't re-trigger
       window.history.replaceState({}, document.title);
-      // Directly call generate ideas
-      handleGenerateIdeas(initialInput);
+      
+      if (investorId) {
+         const investor = INVESTORS.find(i => i.id === investorId);
+         if (investor) {
+           setActiveInvestorId(investorId);
+           setMessages([{ role: 'ai', content: `你好！我是 ${investor.name} (${investor.role})。${investor.style}。请告诉我你的项目想法，我会用我的投资逻辑为你进行深度点评。` }]);
+           setStep('investor-chat');
+         }
+      } else if (initialInput) {
+         // Directly call generate ideas
+         handleGenerateIdeas(initialInput);
+      }
     }
   }, []);
 
@@ -544,7 +589,11 @@ export default function ChatPage() {
               className="w-full justify-start gap-3 text-gray-400 hover:text-white hover:bg-white/5"
               onClick={() => {
                 // Reset state but don't create session yet
-                setMessages([{ role: 'ai', content: '请选择一位模拟投资人，或者先告诉我你的项目想法：' }]);
+                setMessages([{ 
+                  role: 'ai', 
+                  content: '请选择一位投资人智能体，或者先告诉我你的项目想法：',
+                  type: 'investor-selection'
+                }]);
                 setStep('investor-chat');
                 setIdeas([]);
                 setDoc('');
@@ -553,7 +602,7 @@ export default function ChatPage() {
                 setInput("");
               }}
             >
-              <UserCheck className="w-4 h-4" /> 模拟投资人
+              <UserCheck className="w-4 h-4" /> 投资人智能体
             </Button>
             <Button 
               variant="ghost" 
@@ -743,6 +792,24 @@ export default function ChatPage() {
                             ))}
                           </div>
                         </div>
+                      </div>
+                    )}
+
+                    {/* Investor Selection Display */}
+                    {msg.type === 'investor-selection' && (
+                      <div className="mt-3 w-full space-y-3">
+                          <div className="flex flex-wrap gap-3">
+                            {INVESTORS.map(inv => (
+                              <button
+                                key={inv.id}
+                                className="inline-flex items-center justify-center whitespace-nowrap font-medium focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-ring disabled:pointer-events-none disabled:opacity-50 border bg-zinc-900/50 shadow-sm h-9 rounded-lg px-4 border-white/10 hover:bg-white/5 hover:text-white hover:border-[#6C63FF]/50 transition-all text-xs gap-2 group"
+                                onClick={() => handleInvestorChat(inv.id)}
+                              >
+                                <span className="text-base group-hover:scale-110 transition-transform">{inv.avatar}</span>
+                                <span className="text-gray-300 group-hover:text-white">{inv.name}</span>
+                              </button>
+                            ))}
+                          </div>
                       </div>
                     )}
 

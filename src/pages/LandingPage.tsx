@@ -1,6 +1,7 @@
 import Navbar from "@/components/Navbar";
 import Hero from "@/components/Hero";
 import Features from "@/components/Features";
+import InvestorAgents from "@/components/InvestorAgents";
 import Footer from "@/components/Footer";
 
 export default function LandingPage() {
@@ -9,6 +10,7 @@ export default function LandingPage() {
       <Navbar />
       <main className="flex-grow">
         <Hero />
+        <InvestorAgents />
         <Features />
       </main>
       <Footer />
